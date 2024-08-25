@@ -1,0 +1,445 @@
+---
+title: "Bayesian_Lab3"
+author: "Olayemi Morrison(olamo208) Greeshma Jeev Koothuparambil (greko370)"
+date: "2024-05-13"
+output: 
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Assignment 1
+### Question 1a
+Implement (code!) a Gibbs sampler that simulates from the joint posterior p($\omega$, $\beta$|x) $by augmenting the data with Polya-gamma latent variables1 $\omega_i =1, . . . , n$. The full conditional posteriors are given on the slides from Lecture 7. Evaluate the convergence of the Gibbs sampler by calculating the Inefficiency Factors (IFs) and by plotting the trajectories of the sampled Markov chains.
+
+```{r message=FALSE, warning=FALSE}
+
+# Library needed
+library(BayesLogit)
+library(mvtnorm)
+#initialisation
+tau <- 3
+nDraws <- 1000 # Number of draws
+
+# Loading the women dataset
+WomenData <- data.frame(read.csv("WomenAtWork.dat",sep = " ")) # read data from file
+Nobs <- dim(WomenData)[1] # number of observations
+y <- as.matrix(WomenData$Work) 
+
+Covs <- c(2:8) # Select which covariates/features to include
+X <- as.matrix(WomenData[,Covs]);
+Xnames <- colnames(X)
+
+Npar <- dim(X)[2]
+
+# Setting up the prior
+b <- matrix(0,Npar,1) # Prior mean vector
+B <- tau^2*diag(Npar) # Prior covariance matrix
+
+# Select the initial values for beta
+initVal <- rmvnorm(1, mean = b, sigma = B)
+  
+betas <- initVal
+
+w <- rep(0,nrow(X))
+
+gibbsDrawsBeta <- matrix(0,nDraws,7)
+k= y-(1/2)
+for (i in 1:nDraws){
+  
+ 
+  for( row in 1:nrow(X)){
+    
+    # Update w given beta
+    xTransposebeta <- X[row,]%*%t(betas)
+    wval <- rpg( 1,  z=xTransposebeta)
+    w[row] <- wval
+  }
+  # Update beta given w
+  omega= diag(x = w)
+ 
+  VOmega <- solve(t(X)%*%omega%*%X+solve(B))
+  mOmega <- VOmega%*%(t(X)%*% k+solve(B)%*%b)
+  betas <- rmvnorm(1, mean = mOmega, sigma = VOmega)
+  
+  gibbsDrawsBeta[i,] <- betas
+}
+  
+
+#Inefficiency Factor Calculation
+IFVals <- rep(0,ncol(X))
+for (beta in 1:ncol(X)) {
+  a_Gibbs <- acf(gibbsDrawsBeta[,beta],plot = FALSE)
+  
+  IFVals[beta] <- 1+2*sum(a_Gibbs$acf[-1])
+  
+}
+```
+
+*The Inefficiency Factors(IF) are :*
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+names(IFVals) <- colnames(X)
+print(IFVals)
+```
+
+*The trajectories of the sampled Markov Chains are plotted below: *
+
+
+```{r message=FALSE, warning=FALSE}
+
+par(mfrow=c(2,2))
+
+for(column in 1:4){
+  main <-  paste0("Trajectory of ", colnames(X)[column])
+  plot(gibbsDrawsBeta[,column],type="l", main= main, xlab='Iteration number', ylab=colnames(X)[column])
+  
+}
+par(mfrow=c(2,2))
+
+for(column in 5:ncol(X)){
+  main = paste0("Trajectory of ", colnames(X)[column])
+  plot(gibbsDrawsBeta[,column],type="l", main= main, xlab='Iteration number', ylab= colnames(X)[column])
+  
+}
+
+```
+
+
+
+### Question 1b
+Use the posterior draws from a) to compute a 90% equal tail credible interval for Pr(y = 1|x), where the values of x corresponds to a 38-year-old woman, with one child (3 years old), 12 years of education, 7 years of experience, and a husband with an income of 22. A 90% equal tail credible interval (a, b) cuts off 5% percent of the posterior probability mass to the left of a, and 5% to the right of b.
+
+
+```{r}
+
+newxVals <- c( 1, 22, 12,  7, 38,  1,  0)
+
+PredYofnewX <- newxVals %*% t(gibbsDrawsBeta)
+probOfy <- exp(PredYofnewX)/1+exp(PredYofnewX)
+
+CI90 <-  quantile(probOfy,c(0.05,0.95))
+print("The credible interval of equal tail 95% for Y of the new X is :\n")
+print(CI90)
+
+#plot(density(probOfy), type = 'l', lwd = 3, col = "blue",main = "Density distribution of Pr(Y=1|x)")
+
+```
+
+
+***
+
+## Question 2a
+Obtain the maximum likelihood estimator of Beta in the Poisson regression model
+for the eBay data. Which covariates are significant?
+
+```{r}
+library(mvtnorm)
+library(ggplot2)
+library(reshape2)
+
+bidderdf <- read.table("eBayNumberOfBidderData_2024.dat", header = TRUE)
+
+model=glm(nBids~.,family = "poisson", data = bidderdf[,-2])
+
+coeffs <- summary(model)$coefficients[-1,4]<0.05
+
+sig_coeffs <- names(coeffs)[coeffs==TRUE]
+
+cat('The significant coefficients are :',sig_coeffs)
+
+```
+
+## Question 2b
+
+Let's do a Bayesian analysis of the Poisson regression.
+
+```{r}
+#Question 2b
+# Parameters
+X=as.matrix(bidderdf[,-1])
+y=bidderdf[,1]
+mu=as.matrix(rep(0,dim(X)[2]))
+sigma=as.matrix(100*solve(t(X)%*%X))
+Beta0=as.matrix(rep(0,dim(X)[2]))
+# The function to compute the posterior distribution
+logPosterior=function(beta,mu,sigma,X,y){
+  # The dimension of beta is 1*9(Including Intercept)
+  # Prior density is multinorm distribution
+  logPrior=dmvnorm(c(beta),mean=c(mu),sigma=sigma,log=TRUE)
+  # Log Likelihood
+  logLik=sum(y*(X%*%beta))-sum(exp(X%*%beta))#-sum(factorial(y))
+  # The factorial can be omit
+  logPoster=logLik+logPrior
+  return(logPoster)
+}
+OptimRes=optim(Beta0,logPosterior,gr=NULL,
+               mu,sigma,X,y,method=c('BFGS'),
+               control=list(fnscale=-1),hessian=TRUE)
+
+# Obtain the mode of beta and it's negative Hessian matrix
+postMode=OptimRes[["par"]]
+betaHessian=-OptimRes$hessian
+JpostMode=solve(betaHessian)
+cat('The posterior mode is:\n')
+print(postMode)
+
+cat('\nThe posterior covariance is:\n')
+print(JpostMode)
+```
+
+## Question 2c
+
+Let's simulate from the actual posterior of Beta using the Metropolis algorithm
+and compare the results with the approximate results in b). Program a general
+function that uses the Metropolis algorithm to generate random draws from an
+arbitrary posterior density.
+
+```{r}
+#Question 2c
+# A general function that uses the Metropolis algorithm to generate random draw from arbitrary posterior 
+RWMSampler=function(num,logPostFunc,c){
+sampledf=data.frame(matrix(0,nrow=num,ncol=9))
+colnames(sampledf)=colnames(X)
+# The first parameter should be theta
+theta=rmvnorm(1,postMode,c*JpostMode)
+sampledf[1,]=theta
+count=1
+while(count<num){
+  theta=as.numeric(sampledf[count,])
+  thetap=as.numeric(rmvnorm(1,theta,c*JpostMode))
+  acceptance_rate=min(1,
+                      exp(logPostFunc(thetap,mu,sigma,X,y)-logPostFunc(theta,mu,sigma,X,y)))
+  if(runif(1,0,1)<acceptance_rate){
+    count=count+1
+    sampledf[count,]=thetap
+  }
+}
+return(sampledf)
+}
+#Sample from the posterior of beta
+sampledf=RWMSampler(1000,logPosterior,2)
+print(sampledf[1:20,])
+
+
+sampledf_melted <- melt(sampledf)
+
+## No id variables; using all as measure variables
+ggplot(sampledf_melted, aes(x = value, fill = variable)) +
+  geom_density(alpha = 0.5) +
+  facet_wrap(~ variable, scales = "free") +
+  labs( x = "Value", y = "Density",title='Density Histogram of covariants
+',tag='Fig 2.3.1')
+
+sampledf_melted['index']=rep(seq(1,1000,1),9)
+ggplot(sampledf_melted, aes(x = index,y=value, fill = variable)) +
+  geom_line(alpha = 0.5) +
+  facet_wrap(~ variable, scales = "free") +
+  labs( x = "Iteration", y = "Value",title='Value of covariants')
+
+```
+
+## Question 2d
+
+Use the MCMC draws from c) to simulate from the predictive distribution of
+the number of bidders in a new auction with the characteristics below. Plot
+the predictive distribution. What is the probability of no bidders in this new
+auction?
+
+```{r}
+#Question 2d
+# 1000 Sample from the RWMSampler
+# PowerSeller=1,VerifyID=0,Sealed=1,MinBlem=0,MajBlem=1
+# LargNeg=0,LogBook=1.2,MinBidShare=0.8
+
+params=c(1,1,0,1,0,1,0,1.2,0.8)
+result=data.frame(matrix(0,nrow=nrow(sampledf),ncol=0))
+for(i in 1:nrow(sampledf)){
+  lambda=exp(params%*%as.numeric(sampledf[i,]))
+  result[i,1]=rpois(1,lambda)
+}
+colnames(result)=c('y')
+#Plot
+ggplot(data=result,aes(x=y))+
+  geom_histogram(aes(y=after_stat(density)),binwidth=1,alpha=0.5)+
+  geom_density(color='red',linewidth=0.7,adjust=2.5)+
+  labs(title='The predictive distribution of the number of bidders
+')+ xlab("the number of bidders (y)")
+
+cat('The probability of no bidders in this new auction:',mean(result==0))
+```
+
+
+
+
+***
+
+
+## 3a
+Write a function in R that simulates data from the AR(1)-process 
+$$x_t = \mu + \phi (x_{t−1} − \mu) + \epsilon_t, \epsilon_t iid \sim {\sf N}(0, \sigma^2) , $$
+for given values of $\mu$, $\phi$ and $\sigma^2$. Start the process at x1 = $\mu$ and then simulate values for xt for t = 2, 3 . . . , T and return the vector x1:T containing all time
+points. Use $\mu$ = 9, $\sigma^2$ = 4 and T = 250 and look at some different realizations (simulations) of x1:T for values of $\phi$  between −1 and 1 (this is the interval of $\phi$  where the AR(1)-process is stationary). Include a plot of at least one realization in the report. What effect does the value of $\phi$  have on x1:T?
+
+```{r message=FALSE, warning=FALSE}
+library(rstan)
+
+mu <-  9
+sigma2 <- 4
+TVal <- 250
+
+AR <- function(x1, mu,phi,sigma2){
+  eps <- rnorm(1, 0, sqrt(sigma2))
+  xnew <- mu+ (phi*(x1-mu))+eps
+  return(xnew)
+}
+
+phi <- 0.4
+phi <- -0.4
+phi <- 0.7
+par(mfrow=c(1,1))
+
+simulateAR <- function(TVals, phi, x1, mu, sigma2){
+  #simulatedAR <- data.frame(matrix(nrow = TVals, ncol = length(phivals)))
+  #names(simulatedAR) <- phivals
+  ARTlist <-rep(0,TVal)
+  ARTlist[1] <- mu
+  x1 <- mu
+  #phi <- phivals[i]
+   
+  for(t in 2:TVal){
+    ARTlist[t] <- AR(x1,mu, phi, sigma2)
+    x1 <- ARTlist[t]
+      
+  }
+    
+  return(ARTlist)
+}
+phiVals <- c(0.9, 0.7, 0.4, 0, -0.4, -0.7, -0.9)
+for(phi in 1:length(phiVals)){
+  phival <- phiVals[phi]
+  simulatedARlist <-simulateAR(250, phival, x1, mu, sigma2)
+  plot(simulatedARlist, type = "l",main = paste0("AR for phi = ", phival))
+}
+
+```
+
+*Throughout the graph series we can see that as phi values are positive they display a positive correlation between a value and its previous value. We can see a strong increasing or decreasing trend in the graph. While when the phi value falls negative we can see a negative correlation for a value with its previous value. It can be evident from the oscillatory nature of the graph for negative values.*
+
+## 3b
+Use your function from a) to simulate two AR(1)-processes, x1:T with $\phi$ = 0.3 and y1:T with $\phi$ = 0.97. Now, treat your simulated vectors as synthetic data, and treat the values of $\mu$, $\phi$ and $\sigma^2$ as unknown parameters. Implement Stancode that samples from the posterior of the three parameters, using suitable non-informative priors of your choice. 
+
+## i
+Report the posterior mean, 95% credible intervals and the number of effective posterior samples for the three inferred parameters for each of thesimulated AR(1)-process. Are you able to estimate the true values.
+
+
+```{r message=FALSE, warning=FALSE}
+
+#3.bi
+
+simulatedARPoint3 <-simulateAR(250, 0.3, x1, mu, sigma2)
+simulatedARPoint97 <-simulateAR(250, 0.97, x1, mu, sigma2)
+
+set.seed(12345)
+
+StanModel = '
+data {
+  int<lower=0> TVals; // Number of observations
+  vector[TVals] y ; 
+}
+parameters {
+  real mu;
+  real <lower= -1, upper =1 > phi;
+  real<lower=0> sigma2;
+}
+model {
+  mu ~ normal(0,100); // Normal with mean 0, st.dev. 100
+  phi ~ uniform(-1,1);
+  sigma2 ~ scaled_inv_chi_square(1,2); // Scaled-inv-chi2 with nu 1,sigma 2
+  for(i in 2:TVals){
+    y[i] ~ normal(mu+ (phi*(y[i-1]-mu)),sqrt(sigma2));
+  }
+}'
+
+warmup <- 1000
+niter <- 2000
+fitPoint3 <- stan(model_code=StanModel,
+                  data=list(TVals = TVal,y= simulatedARPoint3),
+                  warmup=warmup,iter=niter,chains=4)
+
+sumpoint3 <-summary(fitPoint3)$summary
+```
+*The Mean, 95% CI and number of effiective samples for phi = 0.3 is given in the table below :*
+
+```{r message=FALSE, warning=FALSE}
+knitr::kable(sumpoint3[1:3,c(1,4,8,9)],
+             col.names = c("Mean", "CI 2.5%", "CI 97.5%", "Number of Effective Samples"))
+```
+
+
+```{r message=FALSE, warning=FALSE}
+
+fitPoint97 <- stan(model_code=StanModel,
+                   data=list(TVals = TVal,y= simulatedARPoint97),
+                   warmup=warmup,iter=niter,chains=4)
+
+sumpoint97<- summary(fitPoint97)$summary
+
+```
+
+*The Mean, 95% CI and number of effiective samples for phi = 0.75 is given in the table below :*
+
+```{r message=FALSE, warning=FALSE}
+knitr::kable(sumpoint97[1:3,c(1,4,8,9)],
+             col.names = c("Mean", "CI 2.5%", "CI 97.5%", "Number of Effective Samples"))
+```
+
+*The traceplot for phi =0.3:*
+
+
+```{r message=FALSE, warning=FALSE}
+
+postDrawspoint3 <- extract(fitPoint3)
+par(mfrow = c(1,1))
+# Do automatic traceplots of all chains
+traceplot(fitPoint3)
+
+```
+
+*From the trace plots we can say that the mu, phi and sigma values converges to the average value and the standard deviation seems quite low which is good in terms of convergence*
+
+
+*The traceplot for phi =0.97:*
+
+```{r message=FALSE, warning=FALSE}
+
+postDrawspoint97 <- extract(fitPoint97)
+par(mfrow = c(1,1))
+# Do automatic traceplots of all chains
+traceplot(fitPoint97)
+
+```
+
+*From the trace plots we can say that the mu, phi and sigma values hardly converges to the average value and the standard deviation is really high which is not good in terms of convergence*
+
+
+
+## 3b-ii
+ For each of the two data sets, evaluate the convergence of the samplers
+and plot the joint posterior of $\mu$ and $\phi$. Comments?
+
+```{r message=FALSE, warning=FALSE}
+#3.b.ii
+pairs(fitPoint3, pars = c("mu", "phi"), main = "Convergence of samplers on phi=0.3")
+
+pairs(fitPoint97, pars = c("mu", "phi"), main = "Convergence of samplers on phi=0.97")
+
+```
+
+*For the convergence plot on phi = 0.3 the values converges neatly. It follows a symmetric ellipse pattern which shows a well distributed sample for the distribution. In the case of the convergence plot on phi = 0.97, the graph shows a skewed distribution curve instead of an ellipse. We can see that the values follows a trend in either increasing or decreasing values.*
+
+***
